@@ -87,7 +87,8 @@ $(LAUNCHER): $(SIM_DIR)/launcher/launcher.c | $(BUILD)
 RUN_ENV := SIM_DIR="$(SIM_DIR)" NAME="$(NAME)" ELF="$(ELF)" LAUNCHER="$(LAUNCHER)" \
            GDB="$(GDB)" MCU="$(MCU)" F_CPU="$(F_CPU)" GDB_PORT="$(GDB_PORT)" VIEW_PORT="$(VIEW_PORT)" TERM_PORT="$(TERM_PORT)" UI="$(UI)"
 
-run sim view: $(HEX) $(LAUNCHER)
+# gdb and the launcher use the .elf, so it must exist even when the .hex is already up to date
+run sim view: $(HEX) $(ELF) $(LAUNCHER)
 	@$(RUN_ENV) "$(SIM_DIR)/run.sh" $@
 
 # Upload exactly the .hex that make run simulates
@@ -102,5 +103,3 @@ clean:
 distclean: clean
 	rm -f $(LAUNCHER)
 
-# Keep the .elf: it holds the debug info avr-gdb uses
-.SECONDARY:
