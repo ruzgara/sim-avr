@@ -33,36 +33,42 @@ case "$(uname)" in
     *)      PLATFORM=other ;;
 esac
 
-# Each check: "description|test command|brew package|apt package"
-CHECKS=(
-    "avr assembler (avr-as)|command -v avr-as|osx-cross/avr/avr-gcc|binutils-avr"
-    "avr linker (avr-ld, avr-objcopy)|command -v avr-ld && command -v avr-objcopy|osx-cross/avr/avr-gcc|binutils-avr"
-    "avr-gdb / gdb-multiarch|command -v avr-gdb || command -v gdb-multiarch|osx-cross/avr/avr-gdb|gdb-multiarch"
-    "simavr library + headers|pkg-config --exists simavr|osx-cross/avr/simavr|libsimavr-dev"
-    "libelf|pkg-config --exists libelf || [ -e /usr/lib/x86_64-linux-gnu/libelf.so ] || [ -e /usr/lib/aarch64-linux-gnu/libelf.so ]|libelf|libelf-dev"
-    "C compiler (cc)|command -v cc|-|build-essential"
-    "pkg-config|command -v pkg-config|pkgconf|pkg-config"
-    "tmux|command -v tmux|tmux|tmux"
-    "ttyd (terminal in the browser)|command -v ttyd|ttyd|ttyd"
-    "python3|command -v python3|python3|python3"
-)
-
-bold "Checking dependencies ($PLATFORM)"
 missing_pkgs=()
-for check in "${CHECKS[@]}"; do
-    IFS='|' read -r desc test brew_pkg apt_pkg <<< "$check"
+
+# check "description" "test command" "brew package" "apt package"   ("-" = no package to install)
+check() {
+    local desc="$1" test="$2" brew_pkg="$3" apt_pkg="$4" pkg
     if bash -c "$test" >/dev/null 2>&1; then
         ok "$desc"
-    else
-        miss "$desc"
-        case "$PLATFORM" in
-            mac) pkg="$brew_pkg" ;;
-            apt) pkg="$apt_pkg" ;;
-            *)   pkg="-" ;;
-        esac
-        [[ "$pkg" != "-" ]] && missing_pkgs+=("$pkg")
+        return
     fi
-done
+    miss "$desc"
+    case "$PLATFORM" in
+        mac) pkg="$brew_pkg" ;;
+        apt) pkg="$apt_pkg" ;;
+        *)   pkg="-" ;;
+    esac
+    if [[ "$pkg" != "-" ]]; then
+        missing_pkgs+=("$pkg")
+    fi
+}
+
+bold "Checking dependencies ($PLATFORM)"
+check "avr assembler (avr-as)"           "command -v avr-as"                            osx-cross/avr/avr-gcc binutils-avr
+check "avr linker (avr-ld, avr-objcopy)" "command -v avr-ld && command -v avr-objcopy"  osx-cross/avr/avr-gcc binutils-avr
+check "avr-gdb"                          "command -v avr-gdb"                           osx-cross/avr/avr-gdb gdb-avr
+check "simavr library + headers"         "pkg-config --exists simavr"                   osx-cross/avr/simavr  libsimavr-dev
+check "libelf"                           "pkg-config --exists libelf"                   libelf                libelf-dev
+check "C compiler (cc)"                  "command -v cc"                                -                     build-essential
+check "make"                             "command -v make"                              -                     make
+check "pkg-config"                       "command -v pkg-config"                        pkgconf               pkg-config
+check "tmux"                             "command -v tmux"                              tmux                  tmux
+check "ttyd (terminal in the browser)"   "command -v ttyd"                              ttyd                  ttyd
+check "python3"                          "command -v python3"                           python3               python3
+
+if [[ "$PLATFORM" == mac ]] && ! command -v cc >/dev/null; then
+    echo "  The C compiler and make come with Apple's command line tools: xcode-select --install"
+fi
 
 if ((${#missing_pkgs[@]})); then
     # Remove duplicates, keep order
@@ -96,7 +102,7 @@ if ((${#missing_pkgs[@]})); then
 fi
 
 # gdb's Python TUI windows (the I/O pane) need gdb 10 or newer with Python
-GDB="$(command -v avr-gdb || command -v gdb-multiarch)"
+GDB="$(command -v avr-gdb)"
 if ! "$GDB" -batch -ex 'python import gdb; assert hasattr(gdb, "register_window_type")' >/dev/null 2>&1; then
     echo
     echo "warning: $GDB has no Python TUI support (needs gdb >= 10 with Python)."

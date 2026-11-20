@@ -2,6 +2,7 @@
 # simulation/run.sh - start a simulation session. Called by avr.mk; not meant to be run by hand.
 #
 #   run.sh run    browser page: tmux session (avr-gdb + simulator, via ttyd) beside the circuit viewer
+#                 (UI=terminal: tmux in this terminal instead, circuit viewer alone in the browser)
 #   run.sh sim    tmux in this terminal: avr-gdb (top) + simulator (bottom), no viewer
 #   run.sh view   simulator running freely + circuit viewer in the browser, no gdb
 #
@@ -66,13 +67,10 @@ server_cmd() {     # server_cmd [extra launcher options...]
 
 gdb_cmd() {
     if [[ -z "$GDB" ]]; then
-        echo "error: no avr-gdb or gdb-multiarch found - run ./simulation/setup" >&2
+        echo "error: avr-gdb not found - run ./simulation/setup" >&2
         exit 1
     fi
-    local args=("$GDB" -q)
-    # gdb-multiarch needs to be told the target architecture before connecting
-    [[ "$(basename "$GDB")" == gdb-multiarch ]] && args+=(-ex "set architecture avr")
-    args+=(-ex "source $SIM_DIR/gdb/avr_io.py" -x "$SIM_DIR/gdb/debug.gdb" "$ELF")
+    local args=("$GDB" -q -ex "source $SIM_DIR/gdb/avr_io.py" -x "$SIM_DIR/gdb/debug.gdb" "$ELF")
     quote "${args[@]}"
 }
 
@@ -123,9 +121,23 @@ attach_browser() {
 
 case "$mode" in
     run)
-        check_port "$GDB_PORT"; check_port "$VIEW_PORT"; check_port "$TERM_PORT"
-        new_session "$(server_cmd --wait-gdb)"
-        attach_browser
+        case "${UI:-browser}" in
+            browser)
+                check_port "$GDB_PORT"; check_port "$VIEW_PORT"; check_port "$TERM_PORT"
+                new_session "$(server_cmd --wait-gdb)"
+                attach_browser
+                ;;
+            terminal)
+                check_port "$GDB_PORT"; check_port "$VIEW_PORT"
+                new_session "$(server_cmd --wait-gdb)"
+                open_browser "$VIEW_URL"
+                attach_here
+                ;;
+            *)
+                echo "error: UI must be 'browser' or 'terminal' (got '$UI')" >&2
+                exit 1
+                ;;
+        esac
         ;;
     sim)
         check_port "$GDB_PORT"

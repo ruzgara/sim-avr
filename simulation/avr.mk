@@ -6,6 +6,8 @@
 #
 #   make          assemble every .s in the project folder into NAME.hex
 #   make run      browser page: avr-gdb + simulator (tmux via ttyd) beside the circuit viewer
+#   make run UI=terminal
+#                 avr-gdb + simulator (tmux) in this terminal, circuit viewer in the browser
 #   make sim      simulator + avr-gdb (tmux) in this terminal, no viewer
 #   make view     simulator running freely + circuit viewer, no gdb
 #   make clean    delete build output
@@ -23,6 +25,10 @@ VIEW_PORT := 8000
 # ttyd (the terminal shown in the browser by make run)
 TERM_PORT := 7681
 
+# Where make run shows the gdb session: browser (beside the circuit) or terminal (this terminal).
+# Override per run (make run UI=terminal) or set it in the project Makefile.
+UI        ?= browser
+
 BUILD     := $(SIM_DIR)/build
 SRCS      := $(wildcard *.s)
 OBJS      := $(SRCS:%.s=$(BUILD)/%.o)
@@ -35,8 +41,9 @@ LD      := avr-ld
 OBJCOPY := avr-objcopy
 SIZE    := avr-size
 CC      ?= cc
-# avr-gdb on macOS (Homebrew); Ubuntu uses gdb-multiarch
-GDB     := $(shell command -v avr-gdb 2>/dev/null || command -v gdb-multiarch 2>/dev/null)
+# avr-gdb: Homebrew osx-cross/avr/avr-gdb on macOS, the gdb-avr package on Ubuntu
+# (Ubuntu's gdb-multiarch is built without AVR support)
+GDB     := $(shell command -v avr-gdb 2>/dev/null)
 
 ASFLAGS := -g -mmcu=$(MCU)
 LDFLAGS := -m $(ARCH)
@@ -67,7 +74,7 @@ $(LAUNCHER): $(SIM_DIR)/launcher/launcher.c | $(BUILD)
 
 # Everything run.sh needs, passed as environment variables
 RUN_ENV := SIM_DIR="$(SIM_DIR)" NAME="$(NAME)" ELF="$(ELF)" LAUNCHER="$(LAUNCHER)" \
-           GDB="$(GDB)" MCU="$(MCU)" F_CPU="$(F_CPU)" GDB_PORT="$(GDB_PORT)" VIEW_PORT="$(VIEW_PORT)" TERM_PORT="$(TERM_PORT)"
+           GDB="$(GDB)" MCU="$(MCU)" F_CPU="$(F_CPU)" GDB_PORT="$(GDB_PORT)" VIEW_PORT="$(VIEW_PORT)" TERM_PORT="$(TERM_PORT)" UI="$(UI)"
 
 run sim view: $(HEX) $(LAUNCHER)
 	@$(RUN_ENV) "$(SIM_DIR)/run.sh" $@

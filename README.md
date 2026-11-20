@@ -23,9 +23,12 @@ make run
 |-------------|----------------------------------------------------------------------|
 | `make`      | assemble all `*.s` into `NAME.hex` (`.o`/`.elf` go to `simulation/build/`) |
 | `make run`  | browser page: tmux session (avr-gdb `layout avr` + simulator) beside the circuit viewer |
+| `make run UI=terminal` | tmux session in this terminal, circuit viewer alone in the browser |
 | `make sim`  | tmux in this terminal: avr-gdb + simulator, no viewer                |
 | `make view` | simulator running freely + circuit viewer, no gdb (Ctrl-C to stop)   |
 | `make clean`| delete build output                                                   |
+
+To make the terminal version the default for a project, add `UI := terminal` to its Makefile.
 
 Quitting gdb (or Ctrl-C in the terminal that ran `make run`) ends the whole session.
 Ports: gdb 1234, viewer http://127.0.0.1:8000/, terminal (ttyd) 7681.
