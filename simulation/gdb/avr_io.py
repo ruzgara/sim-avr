@@ -114,7 +114,10 @@ class AvrIoWindow:
         if not self.tui.is_valid():
             return
         self.tui.erase()
-        self.tui.write(render_text(read_io()))
+        # Only write as many lines as fit: text past the bottom of the pane would otherwise
+        # be squashed onto its last line
+        lines = render_text(read_io()).split("\n")[: max(self.tui.height, 1)]
+        self.tui.write("\n".join(lines))
 
 
 gdb.register_window_type("avrio", AvrIoWindow)

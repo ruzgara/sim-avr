@@ -82,6 +82,8 @@ new_session() {   # new_session "<bottom pane command>"
     tmux kill-session -t "$SESSION" 2>/dev/null || true
     tmux new-session -d -s "$SESSION" -x "$(tput cols)" -y "$(tput lines)" \
         "$bottom; read -r -p 'simulator exited - press enter'"
+    # No status bar: it only shows the window name, host name and clock
+    tmux set-option -t "$SESSION" status off
     # Give the gdb server a moment to start listening before gdb connects
     tmux split-window -t "$SESSION" -v -b -l 80% \
         "sleep 0.5; $(gdb_cmd); tmux kill-session -t $(quote "$SESSION")"

@@ -6,16 +6,37 @@ side by side in one browser page, all driven by the same simulation.
 
 Works on macOS and Ubuntu (Windows: use WSL).
 
+![make run: avr-gdb with the I/O register pane on the left, the circuit viewer on the right](docs/screenshot.png)
+
+## Install
+
+Clone the kit once, anywhere:
+
+```sh
+git clone https://github.com/ruzgara/sim-avr ~/sim-avr
+```
+
 ## New project
+
+Each project gets its own copy of the `simulation/` folder:
 
 ```sh
 mkdir myproject && cd myproject
-cp -R ~/Developer/sim-avr/simulation .
+cp -R ~/sim-avr/simulation .
 ./simulation/setup          # checks/installs dependencies, creates Makefile + myproject.s
 make run
 ```
 
+Or, without cloning, download the latest `simulation/` folder straight into the project:
+
+```sh
+curl -L https://github.com/ruzgara/sim-avr/archive/master.tar.gz \
+  | tar -xz --strip-components=1 sim-avr-master/simulation
+```
+
 `setup` never overwrites existing files, so it can also be run in a folder that already has a `.s`.
+To update a project's kit later, replace its `simulation/` folder with a newer copy (keep your
+`simulation/diagram.json`).
 
 ## Commands
 
