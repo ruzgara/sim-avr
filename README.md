@@ -31,7 +31,7 @@ Each project gets its own copy of the `simulation/` folder:
 
 ```sh
 mkdir myproject && cd myproject
-cp -R ~/sim-avr/simulation .
+cp -R ~/sim-avr/simulation .  # or the curl command above
 ./simulation/setup          # checks/installs dependencies, creates Makefile + myproject.s
 make run
 ```
