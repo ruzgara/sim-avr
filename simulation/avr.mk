@@ -10,6 +10,9 @@
 #                 avr-gdb + simulator (tmux) in this terminal, circuit viewer in the browser
 #   make sim      simulator + avr-gdb (tmux) in this terminal, no viewer
 #   make view     simulator running freely + circuit viewer, no gdb
+#   make upload   upload NAME.hex to a real Nano with avrdude (port found automatically)
+#   make upload BOOTLOADER=new
+#                 for Nanos with the new bootloader (115200 baud); the default is the old one
 #   make clean    delete build output
 
 # Folder this file lives in (simulation/), without a trailing slash
@@ -28,6 +31,14 @@ TERM_PORT := 7681
 # Where make run shows the gdb session: browser (beside the circuit) or terminal (this terminal).
 # Override per run (make run UI=terminal) or set it in the project Makefile.
 UI        ?= browser
+
+# make upload: Nano bootloader, "old" (57600 baud, most clones) or "new" (115200 baud).
+# PORT is found automatically; set it (make upload PORT=/dev/...) if that fails.
+BOOTLOADER ?= old
+BAUD_old  := 57600
+BAUD_new  := 115200
+BAUD      ?= $(BAUD_$(BOOTLOADER))
+PORT      ?=
 
 BUILD     := $(SIM_DIR)/build
 SRCS      := $(wildcard *.s)
@@ -51,7 +62,7 @@ LDFLAGS := -m $(ARCH)
 LAUNCHER_CFLAGS := -O2 -Wall -Wextra $(shell pkg-config --cflags simavr 2>/dev/null)
 LAUNCHER_LIBS   := $(shell pkg-config --libs simavr libelf 2>/dev/null || pkg-config --libs simavr 2>/dev/null || echo -lsimavr -lelf)
 
-.PHONY: all run sim view clean distclean launcher
+.PHONY: all run sim view upload clean distclean launcher
 all: $(HEX)
 
 $(BUILD):
@@ -78,6 +89,11 @@ RUN_ENV := SIM_DIR="$(SIM_DIR)" NAME="$(NAME)" ELF="$(ELF)" LAUNCHER="$(LAUNCHER
 
 run sim view: $(HEX) $(LAUNCHER)
 	@$(RUN_ENV) "$(SIM_DIR)/run.sh" $@
+
+# Upload exactly the .hex that make run simulates
+upload: $(HEX)
+	@if [ -z "$(BAUD)" ]; then echo "error: BOOTLOADER must be old or new (got '$(BOOTLOADER)')" >&2; exit 1; fi
+	@HEX="$(HEX)" MCU="$(MCU)" PORT="$(PORT)" BAUD="$(BAUD)" "$(SIM_DIR)/upload.sh"
 
 clean:
 	rm -f $(BUILD)/*.o $(BUILD)/*.elf $(HEX)

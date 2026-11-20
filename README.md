@@ -47,6 +47,7 @@ To update a project's kit later, replace its `simulation/` folder with a newer c
 | `make run UI=terminal` | tmux session in this terminal, circuit viewer alone in the browser |
 | `make sim`  | tmux in this terminal: avr-gdb + simulator, no viewer                |
 | `make view` | simulator running freely + circuit viewer, no gdb (Ctrl-C to stop)   |
+| `make upload` | upload `NAME.hex` to a real Nano with avrdude (port found automatically) |
 | `make clean`| delete build output                                                   |
 
 To make the terminal version the default for a project, add `UI := terminal` to its Makefile.
@@ -62,6 +63,24 @@ In the `make run` page:
 - **Fullscreen** (bottom right): in Chrome/Edge/Brave/Arc it also sends browser shortcuts such as
   Ctrl-W / Ctrl-T to the terminal instead of the browser (hold Esc to leave) - useful on Linux,
   where Ctrl-W would otherwise close the tab
+
+## Uploading to a real Nano
+
+`make upload` flashes exactly the `.hex` you simulated, using avrdude (`setup` offers to install it).
+
+- The board's USB serial port is found automatically; if there are none or several, give it:
+  `make upload PORT=/dev/cu.usbserial-1410` (macOS) or `PORT=/dev/ttyUSB0` (Linux).
+- The default is the **old Nano bootloader** (57600 baud), which most clones have. For the new
+  bootloader (115200 baud) use `make upload BOOTLOADER=new`, or put `BOOTLOADER := new` in the
+  project Makefile. If avrdude can't sync with the board, it suggests the other one.
+- Linux: if the port isn't accessible, add yourself to the `dialout` group.
+
+## Existing projects
+
+`setup` leaves an existing `Makefile` alone. If it doesn't include `simulation/avr.mk`, either rename
+it (`mv Makefile Makefile.old`) and run `setup` again, or add `NAME := myproject` and
+`include simulation/avr.mk` to it. Also note: every `.s` in the folder is linked into one program
+(one program per folder), and sources are assembled with plain `avr-as` (use `.equ`, no `#include`).
 
 ## The circuit
 

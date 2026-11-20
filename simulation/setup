@@ -101,6 +101,20 @@ if ((${#missing_pkgs[@]})); then
     fi
 fi
 
+# Optional: avrdude, only needed for `make upload` to a real board
+if ! command -v avrdude >/dev/null; then
+    echo
+    echo "Optional: avrdude is not installed. It is only needed to upload to a real Nano (make upload)."
+    case "$PLATFORM" in
+        mac) opt_cmd=(brew install avrdude) ;;
+        apt) opt_cmd=(sudo apt-get install -y avrdude) ;;
+        *)   opt_cmd=() ;;
+    esac
+    if ((${#opt_cmd[@]})) && ask "Install avrdude now (${opt_cmd[*]})?"; then
+        "${opt_cmd[@]}"
+    fi
+fi
+
 # gdb's Python TUI windows (the I/O pane) need gdb 10 or newer with Python
 GDB="$(command -v avr-gdb)"
 if ! "$GDB" -batch -ex 'python import gdb; assert hasattr(gdb, "register_window_type")' >/dev/null 2>&1; then
@@ -117,6 +131,11 @@ cd "$PROJECT_DIR"
 
 if [[ -e Makefile ]]; then
     note "Makefile exists, leaving it"
+    if ! grep -q 'simulation/avr.mk' Makefile; then
+        note "  note: it doesn't include simulation/avr.mk, so make run/upload won't work yet. Either:"
+        note "    - mv Makefile Makefile.old and run ./simulation/setup again, or"
+        note "    - add these lines to it:  NAME := $NAME   and   include simulation/avr.mk"
+    fi
 else
     printf 'NAME := %s\ninclude simulation/avr.mk\n' "$NAME" > Makefile
     note "created Makefile"
@@ -183,13 +202,13 @@ if ! grep -qx 'simulation/build/' .gitignore 2>/dev/null; then
     note "added simulation/build/ to .gitignore"
 fi
 
-chmod +x simulation/run.sh simulation/setup
+chmod +x simulation/run.sh simulation/setup simulation/upload.sh
 
 # ---------------------------------------------------------------- 3. launcher
 
 echo
 bold "Building the simulator launcher"
-make --no-print-directory launcher
+make --no-print-directory -f simulation/avr.mk NAME="$NAME" launcher
 
 echo
 bold "Done."
@@ -197,3 +216,4 @@ echo "  make        build $NAME.hex"
 echo "  make run    simulator + gdb + circuit viewer"
 echo "  make sim    simulator + gdb"
 echo "  make view   circuit viewer only (program runs freely)"
+echo "  make upload upload to a real Nano (BOOTLOADER=new for the 115200 baud bootloader)"
