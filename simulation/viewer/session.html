@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>AVR session</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root { --split: 58%; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #1e1e1e; }
+    body { display: flex; }
+    iframe { border: 0; height: 100%; display: block; }
+    #term { width: var(--split); background: #1e1e1e; }
+    #circuit { flex: 1; min-width: 0; }
+    /* Drag this bar to resize the two halves */
+    #divider { width: 6px; cursor: col-resize; background: #333; flex: none; }
+    #divider:hover, body.dragging #divider { background: #4a90d9; }
+    /* While dragging, stop the iframes from swallowing mouse events */
+    body.dragging iframe { pointer-events: none; }
+    #fullscreen {
+      position: fixed; right: 10px; bottom: 10px; padding: 5px 10px; border-radius: 12px;
+      border: 0; font: 13px system-ui, sans-serif; color: #fff; background: #555; cursor: pointer;
+      opacity: 0.85;
+    }
+    #fullscreen:hover { opacity: 1; background: #4a90d9; }
+  </style>
+</head>
+<body>
+  <!-- Left: the tmux session (gdb + simulator), served by ttyd. Right: the circuit viewer. -->
+  <iframe id="term" title="terminal"></iframe>
+  <div id="divider"></div>
+  <iframe id="circuit" title="circuit" src="index.html"></iframe>
+  <button id="fullscreen" hidden
+          title="Fullscreen also sends browser shortcuts like Ctrl-W and Ctrl-T to the terminal. Hold Esc to leave.">
+    Fullscreen
+  </button>
+  <script>
+    // Ask before closing or reloading the tab, so a stray Ctrl-W / Cmd-W doesn't drop the session view.
+    // (The session itself keeps running; reopening the page reconnects to it.)
+    addEventListener('beforeunload', (e) => { e.preventDefault(); e.returnValue = ''; });
+
+    // Fullscreen button. In Chromium browsers (Chrome, Edge, Brave, Arc) it also turns on
+    // Keyboard Lock, so shortcuts like Ctrl-W, Ctrl-T and Ctrl-N go to the terminal instead of
+    // the browser. Keyboard Lock only works in fullscreen; other browsers just go fullscreen.
+    const fsButton = document.getElementById('fullscreen');
+    const canLock = !!(navigator.keyboard && navigator.keyboard.lock);
+    if (!canLock) fsButton.title = 'Fullscreen (this browser can\'t capture shortcuts like Ctrl-W; Chrome can)';
+    if (document.fullscreenEnabled) {
+      fsButton.hidden = false;
+      fsButton.addEventListener('click', async () => {
+        if (document.fullscreenElement) {
+          await document.exitFullscreen();
+          return;
+        }
+        await document.documentElement.requestFullscreen({ navigationUI: 'hide' });
+        if (canLock) {
+          try { await navigator.keyboard.lock(); } catch (e) { console.warn('keyboard lock failed', e); }
+        }
+        document.getElementById('term').focus();
+      });
+      document.addEventListener('fullscreenchange', () => {
+        const on = !!document.fullscreenElement;
+        if (!on && canLock) navigator.keyboard.unlock();
+        fsButton.textContent = on ? (canLock ? 'Exit fullscreen (hold Esc)' : 'Exit fullscreen (Esc)')
+                                  : 'Fullscreen';
+      });
+    }
+  </script>
+  <script>
+    // ttyd's port comes from the URL (?term=7681), set by run.sh
+    const termPort = new URLSearchParams(location.search).get('term') || '7681';
+    const term = document.getElementById('term');
+    term.src = `http://${location.hostname}:${termPort}/`;
+    // Give the terminal keyboard focus once it has loaded
+    term.addEventListener('load', () => term.focus());
+
+    // Remember the split between visits
+    try {
+      const saved = localStorage.getItem('avr-split');
+      if (saved) document.documentElement.style.setProperty('--split', saved);
+    } catch (e) {}
+
+    const divider = document.getElementById('divider');
+    divider.addEventListener('pointerdown', (e) => {
+      document.body.classList.add('dragging');
+      divider.setPointerCapture(e.pointerId);
+    });
+    divider.addEventListener('pointermove', (e) => {
+      if (!document.body.classList.contains('dragging')) return;
+      const pct = Math.min(85, Math.max(20, (e.clientX / innerWidth) * 100));
+      document.documentElement.style.setProperty('--split', pct + '%');
+    });
+    divider.addEventListener('pointerup', () => {
+      document.body.classList.remove('dragging');
+      try {
+        localStorage.setItem('avr-split',
+          getComputedStyle(document.documentElement).getPropertyValue('--split').trim());
+      } catch (e) {}
+      term.focus();
+    });
+  </script>
+</body>
+</html>

@@ -1,8 +1,8 @@
 # sim-avr
 
 Simulate and debug ATmega328P (Arduino Nano) assembly projects with one command:
-simavr-based simulator + avr-gdb (with an I/O register pane) + a Wokwi-style circuit viewer in
-your browser, all driven by the same simulation.
+simavr-based simulator + avr-gdb (with an I/O register pane) + a Wokwi-style circuit viewer,
+side by side in one browser page, all driven by the same simulation.
 
 Works on macOS and Ubuntu (Windows: use WSL).
 
@@ -22,12 +22,22 @@ make run
 | command     | what it does                                                         |
 |-------------|----------------------------------------------------------------------|
 | `make`      | assemble all `*.s` into `NAME.hex` (`.o`/`.elf` go to `simulation/build/`) |
-| `make run`  | tmux: avr-gdb (`layout avr`) + simulator, circuit viewer opens in the browser |
-| `make sim`  | tmux: avr-gdb + simulator, no viewer                                 |
+| `make run`  | browser page: tmux session (avr-gdb `layout avr` + simulator) beside the circuit viewer |
+| `make sim`  | tmux in this terminal: avr-gdb + simulator, no viewer                |
 | `make view` | simulator running freely + circuit viewer, no gdb (Ctrl-C to stop)   |
 | `make clean`| delete build output                                                   |
 
-Quitting gdb ends the whole session. Ports: gdb 1234, viewer http://127.0.0.1:8000/.
+Quitting gdb (or Ctrl-C in the terminal that ran `make run`) ends the whole session.
+Ports: gdb 1234, viewer http://127.0.0.1:8000/, terminal (ttyd) 7681.
+
+In the `make run` page:
+- the terminal is the real tmux session, served by [ttyd](https://github.com/tsl0922/ttyd);
+  `tmux attach -t avr-NAME` attaches to it from a normal terminal as well
+- drag the bar between the halves to resize
+- closing the tab asks first; the session keeps running and reopening the page reconnects
+- **Fullscreen** (bottom right): in Chrome/Edge/Brave/Arc it also sends browser shortcuts such as
+  Ctrl-W / Ctrl-T to the terminal instead of the browser (hold Esc to leave) - useful on Linux,
+  where Ctrl-W would otherwise close the tab
 
 ## The circuit
 

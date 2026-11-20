@@ -43,6 +43,7 @@ CHECKS=(
     "C compiler (cc)|command -v cc|-|build-essential"
     "pkg-config|command -v pkg-config|pkgconf|pkg-config"
     "tmux|command -v tmux|tmux|tmux"
+    "ttyd (terminal in the browser)|command -v ttyd|ttyd|ttyd"
     "python3|command -v python3|python3|python3"
 )
 

@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # simulation/run.sh - start a simulation session. Called by avr.mk; not meant to be run by hand.
 #
-#   run.sh run    tmux: avr-gdb (top) + viewer server and launcher (bottom), browser opens the viewer
-#   run.sh sim    tmux: avr-gdb (top) + launcher (bottom), no viewer
-#   run.sh view   viewer server + launcher running freely in this terminal, browser opens the viewer
+#   run.sh run    browser page: tmux session (avr-gdb + simulator, via ttyd) beside the circuit viewer
+#   run.sh sim    tmux in this terminal: avr-gdb (top) + simulator (bottom), no viewer
+#   run.sh view   simulator running freely + circuit viewer in the browser, no gdb
 #
 # Settings come from avr.mk as environment variables.
 set -euo pipefail
 
 mode="${1:?usage: run.sh run|sim|view}"
-: "${SIM_DIR:?}" "${NAME:?}" "${ELF:?}" "${LAUNCHER:?}" "${MCU:?}" "${F_CPU:?}" "${GDB_PORT:?}" "${VIEW_PORT:?}"
+: "${SIM_DIR:?}" "${NAME:?}" "${ELF:?}" "${LAUNCHER:?}" "${MCU:?}" "${F_CPU:?}" \
+  "${GDB_PORT:?}" "${VIEW_PORT:?}" "${TERM_PORT:?}"
 GDB="${GDB:-}"
 
 SESSION="avr-$NAME"
@@ -17,6 +18,13 @@ VIEW_URL="http://127.0.0.1:$VIEW_PORT/"
 
 # Quote an array into one string that a shell (inside tmux) will split back the same way
 quote() { printf '%q ' "$@"; }
+
+require() {
+    if ! command -v "$1" >/dev/null; then
+        echo "error: $1 not found - run ./simulation/setup" >&2
+        exit 1
+    fi
+}
 
 port_in_use() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 
@@ -28,19 +36,20 @@ check_port() {
     fi
 }
 
-# Open the viewer once the server answers (in the background so we don't block)
-open_browser() {
+# Open a URL once the viewer server answers (in the background so we don't block)
+open_browser() {   # open_browser URL
+    local url="$1"
     [[ -n "${NO_BROWSER:-}" ]] && return   # used by tests
     (
         for _ in $(seq 50); do port_in_use "$VIEW_PORT" && break; sleep 0.1; done
         if [[ "$(uname)" == Darwin ]]; then
-            open "$VIEW_URL"
+            open "$url"
         elif command -v wslview >/dev/null; then
-            wslview "$VIEW_URL"                       # WSL
+            wslview "$url"                       # WSL
         elif command -v xdg-open >/dev/null; then
-            xdg-open "$VIEW_URL" >/dev/null 2>&1
+            xdg-open "$url" >/dev/null 2>&1
         else
-            echo "Open $VIEW_URL in your browser" >&2
+            echo "Open $url in your browser" >&2
         fi
     ) &
 }
@@ -67,19 +76,20 @@ gdb_cmd() {
     quote "${args[@]}"
 }
 
-# Two panes: gdb on top (most of the space), simulator output below.
+# Create the tmux session (detached): gdb on top with most of the space, simulator output below.
 # Quitting gdb kills the whole session, which also stops the simulator.
-start_tmux() {   # start_tmux "<bottom pane command>"
+new_session() {   # new_session "<bottom pane command>"
     local bottom="$1"
-    if ! command -v tmux >/dev/null; then
-        echo "error: tmux not found - run ./simulation/setup" >&2
-        exit 1
-    fi
+    require tmux
     tmux kill-session -t "$SESSION" 2>/dev/null || true
-    tmux new-session -d -s "$SESSION" -x "$(tput cols)" -y "$(tput lines)" "$bottom; read -r -p 'simulator exited - press enter'"
+    tmux new-session -d -s "$SESSION" -x "$(tput cols)" -y "$(tput lines)" \
+        "$bottom; read -r -p 'simulator exited - press enter'"
     # Give the gdb server a moment to start listening before gdb connects
     tmux split-window -t "$SESSION" -v -b -l 80% \
         "sleep 0.5; $(gdb_cmd); tmux kill-session -t $(quote "$SESSION")"
+}
+
+attach_here() {
     if [[ -n "${TMUX:-}" ]]; then
         tmux switch-client -t "$SESSION"
     else
@@ -87,19 +97,44 @@ start_tmux() {   # start_tmux "<bottom pane command>"
     fi
 }
 
+# Serve the tmux session to the browser with ttyd and wait until it ends
+attach_browser() {
+    require ttyd
+    # Only listen on this machine (loopback), and with -O refuse websocket connections that
+    # come from another website's page: a terminal running gdb can run shell commands.
+    local lo=lo
+    [[ "$(uname)" == Darwin ]] && lo=lo0
+    ttyd -W -O -i "$lo" -p "$TERM_PORT" \
+        -t fontSize=14 -t disableResizeOverlay=true \
+        -t 'theme={"background":"#1e1e1e"}' \
+        tmux attach-session -t "$SESSION" >/dev/null 2>&1 &
+    TTYD_PID=$!   # global: the exit trap runs after this function has returned
+    # On Ctrl-C or exit: end the tmux session (stops gdb + simulator) and ttyd
+    trap 'tmux kill-session -t "$SESSION" 2>/dev/null; kill "$TTYD_PID" 2>/dev/null' EXIT
+    trap 'exit 0' INT TERM
+
+    local url="${VIEW_URL}session.html?term=$TERM_PORT"
+    open_browser "$url"
+    echo "Session: $url"
+    echo "To use it from this terminal too:  tmux attach -t $SESSION"
+    echo "Quit gdb or press Ctrl-C here to stop."
+    while tmux has-session -t "$SESSION" 2>/dev/null; do sleep 0.5; done
+}
+
 case "$mode" in
     run)
-        check_port "$GDB_PORT"; check_port "$VIEW_PORT"
-        open_browser
-        start_tmux "$(server_cmd --wait-gdb)"
+        check_port "$GDB_PORT"; check_port "$VIEW_PORT"; check_port "$TERM_PORT"
+        new_session "$(server_cmd --wait-gdb)"
+        attach_browser
         ;;
     sim)
         check_port "$GDB_PORT"
-        start_tmux "$(launcher_cmd --wait-gdb)"
+        new_session "$(launcher_cmd --wait-gdb)"
+        attach_here
         ;;
     view)
         check_port "$VIEW_PORT"
-        open_browser
+        open_browser "$VIEW_URL"
         echo "Ctrl-C to stop"
         eval "exec $(server_cmd --no-gdb)"
         ;;
