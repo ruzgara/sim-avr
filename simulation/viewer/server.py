@@ -26,20 +26,41 @@ VIEWER_DIR = os.path.dirname(os.path.abspath(__file__))
 lock = threading.Lock()   # protects everything below
 latest_io = {}            # port letter -> latest "io ..." line
 latest_state = None       # latest "state ..." line
+latest_time = None        # latest "time ..." line (stopwatch)
+latest_lap = None         # latest "lap ..." line
+latest_mark = None        # latest "mark ..." line (stopwatch reset point)
 clients = set()           # one queue.Queue per connected browser
 
 
 def broadcast(line):
     """Remember the line if it is state worth replaying, then send it to all browsers."""
-    global latest_state
+    global latest_state, latest_time, latest_lap, latest_mark
     parts = line.split()
     with lock:
         if parts[0] == "io" and len(parts) >= 2:
             latest_io[parts[1]] = line
         elif parts[0] == "state":
             latest_state = line
+        elif parts[0] == "time":
+            latest_time = line
+        elif parts[0] == "lap":
+            latest_lap = line
+        elif parts[0] == "mark":
+            latest_mark = line
         for q in clients:
             q.put(line)
+
+
+def write_mark(path, fields):
+    """Save the stopwatch reset point where gdb's pane reads it (temp file + rename)."""
+    if not path:
+        return
+    try:
+        with open(path + ".tmp", "w") as f:
+            f.write(" ".join(fields) + "\n")
+        os.replace(path + ".tmp", path)
+    except OSError:
+        pass
 
 
 def pump_launcher(proc, httpd):
@@ -66,6 +87,31 @@ class Handler(SimpleHTTPRequestHandler):
 
     def log_message(self, fmt, *args):     # keep the terminal quiet
         pass
+
+    def do_POST(self):
+        # POST /lap   "<cycles> <instructions>"  from gdb: a new lap (time between two stops)
+        # POST /mark  "<cycles> <instructions>"  from gdb: `sw reset` (gdb wrote the mark file)
+        # POST /reset (no body)                  from the browser's reset button
+        length = min(int(self.headers.get("Content-Length") or 0), 100)
+        fields = self.rfile.read(length).decode(errors="replace").split()
+        if self.path in ("/lap", "/mark"):
+            if len(fields) != 2 or not all(f.isdigit() for f in fields):
+                self.send_error(400)
+                return
+            broadcast(self.path[1:] + " " + " ".join(fields))
+        elif self.path == "/reset":
+            with lock:
+                now = latest_time.split()[1:3] if latest_time else None
+            if not now:
+                self.send_error(409, "no counters yet")
+                return
+            write_mark(self.mark_path, now)
+            broadcast("mark " + " ".join(now))
+        else:
+            self.send_error(404)
+            return
+        self.send_response(204)
+        self.end_headers()
 
     def do_GET(self):
         path = self.path.split("?", 1)[0]
@@ -101,6 +147,12 @@ class Handler(SimpleHTTPRequestHandler):
         q = queue.Queue()
         with lock:                         # snapshot + register atomically: no gaps, no dupes
             first = [latest_io[p] for p in sorted(latest_io)]
+            if latest_time:
+                first.append(latest_time)
+            if latest_lap:
+                first.append(latest_lap)
+            if latest_mark:
+                first.append(latest_mark)
             if latest_state:
                 first.append(latest_state)
             clients.add(q)
@@ -126,6 +178,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--diagram", required=True)
+    ap.add_argument("--mark", help="stopwatch reset-point file, shared with gdb")
     ap.add_argument("launcher", nargs=argparse.REMAINDER, help="-- then the launcher command line")
     args = ap.parse_args()
     cmd = args.launcher[1:] if args.launcher[:1] == ["--"] else args.launcher
@@ -133,6 +186,7 @@ def main():
         ap.error("launcher command missing (put it after --)")
 
     Handler.diagram_path = args.diagram
+    Handler.mark_path = args.mark
     ThreadingHTTPServer.daemon_threads = True
     ThreadingHTTPServer.allow_reuse_address = True
     httpd = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)

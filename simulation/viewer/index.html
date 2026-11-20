@@ -28,12 +28,31 @@
     #badge.stopped { background: #d98a00; }
     #badge.ended { background: #555; }
     #badge.disconnected { background: #c0392b; }
+    /* Stopwatch: simulated time from the launcher's cycle count (exact, not wall-clock) */
+    #clock {
+      position: fixed; top: 10px; left: 10px; padding: 6px 10px; border-radius: 8px;
+      font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: #222;
+      background: rgba(255, 255, 255, 0.85); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+      user-select: text; line-height: 1.5;
+    }
+    #clocktext { white-space: pre; }
+    #clock .big { font-size: 16px; font-weight: 600; }
+    #clock .dim { color: #666; }
+    #clockreset {
+      margin-top: 4px; padding: 2px 10px; border: 1px solid #bbb; border-radius: 10px;
+      font: 12px system-ui, sans-serif; background: #fff; cursor: pointer;
+    }
+    #clockreset:hover { background: #4a90d9; border-color: #4a90d9; color: #fff; }
     #msg { position: fixed; left: 10px; bottom: 10px; color: #a00; font-size: 13px; }
   </style>
 </head>
 <body>
   <div id="viewport"><div id="stage"><svg id="wires"></svg></div></div>
   <div id="badge">connecting...</div>
+  <div id="clock" title="Simulated time: cycles / clock frequency (exact). lap = between the last two gdb stops.">
+    <div id="clocktext"></div>
+    <button id="clockreset" title="Start a new measurement from now (same as `sw reset` in gdb)">reset</button>
+  </div>
   <div id="msg"></div>
   <!-- Wokwi web components (defines <wokwi-led>, <wokwi-arduino-nano>, ...) -->
   <script src="vendor/wokwi-elements.bundle.min.js"></script>

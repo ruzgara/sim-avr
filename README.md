@@ -79,6 +79,101 @@ q
 y
 ```
 
+### Timing: the stopwatch
+
+The simulator counts every clock cycle and instruction, so timings are exact: at 16 MHz one
+cycle is 62.5 ns, and the time shown is cycles / 16,000,000 (never your computer's clock).
+It appears at the top of the AVR I/O pane, as a live clock in the circuit viewer, and with:
+
+- `sw` or `stopwatch` -> show the counters
+- `sw reset` -> start a new measurement from here (adds a `reset` line). The **reset** button in
+  the circuit viewer does the same; both share one reset point, shown in the pane and the browser
+
+The three lines mean:
+
+- `time` -> total since the program started (only resets when you restart `make run`)
+- `lap` -> between the last two stops you saw. Every `c`, `fin`, `si`, `ni` starts a new lap,
+  so read it right after the stop you care about
+- `reset` -> since the last `sw reset` / reset button
+
+The examples below use the kit's example program (`example/example.s`, a binary counter whose
+`delay` is three nested loops with `ldi r20, 20`).
+
+#### Time one call of a routine
+
+Stop when the routine is entered, then step out of it:
+
+```
+b delay
+c
+fin
+```
+
+```
+lap       246.724 ms
+      3,947,584 cyc  2,636,862 ins
+```
+
+That is exactly one call of `delay`, from its first instruction through its `ret`. It does not
+include the `rcall` that called it (3 cycles). To include it, stop at the call and step over it:
+
+```
+b example.s:18      # the line with `rcall delay`
+c
+ni
+```
+
+```
+lap       246.724 ms
+      3,947,587 cyc  2,636,863 ins
+```
+
+#### Time the period between calls
+
+With the breakpoint on `delay`, each `c` runs to the next call, so `lap` is one whole period
+(e.g. how long the LEDs show each value): the delay plus the code between calls.
+
+```
+c
+```
+
+```
+lap       246.725 ms
+      3,947,598 cyc  2,636,868 ins
+```
+
+#### Time several periods
+
+```
+sw reset
+c 4
+```
+
+`c 4` continues until the 4th breakpoint hit from here; `reset` then shows all four periods:
+
+```
+reset     986.899 ms
+      15,790,392 cyc  10,547,472 ins
+```
+
+#### Check it by hand
+
+The stopwatch matches the instruction timings in the ATmega328P datasheet (`dec` 1 cycle, `brne`
+2 if taken and 1 if not, `clr`/`ldi` 1, `rcall` 3, `ret` 4). For the example's `delay`:
+
+- inner loop (`dec r18` / `brne`, 256 times): 256 × 3 − 1 = 767 cycles
+- middle loop (`clr r18`, inner, `dec r19` / `brne`, 256 times): 256 × 771 − 1 = 197,375 cycles
+- outer loop (`clr r19`, middle, `dec r20` / `brne`, N times): N × 197,379 − 1 cycles
+- plus `ldi r20, N` (1) and `ret` (4): **197,379 × N + 4 cycles**
+
+With N = 20 that is 3,947,584 cycles = 246.724 ms, exactly what `fin` measured. Each count of N
+is 12.336 ms. To hit a target time, work out N (and pad with `nop`s for the last few cycles),
+then confirm it with the stopwatch.
+
+`sw` prints the same lines in the command area, which is handy for copying into a report. In the
+browser, pressing **reset** while the program is running can be up to 50 ms late (that is how
+often the running totals reach the browser); while stopped, and with `sw reset`, it is exact.
+
 ## Commands
 
 | command     | what it does                                                         |

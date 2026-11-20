@@ -8,6 +8,7 @@
  * stdout protocol (one event per line):
  *   io <port> <ddr> <port> <pin>   e.g. "io B 0f 05 05"
  *   state <running|stopped>
+ *   time <cycles> <instructions> <freq>   totals since reset, e.g. "time 197523 65880 16000000"
  *   exit <reason>
  * Human-readable messages go to stderr.
  */
@@ -85,6 +86,37 @@ static void emit_state(int stopped)
 	fflush(out);
 }
 
+/*
+ * Stopwatch counters. Time comes from the simulated cycle count, never the
+ * wall clock: at 16 MHz one cycle is exactly 62.5 ns, so timings are exact
+ * and repeatable even though the throttle only keeps us roughly real-time.
+ */
+static unsigned long long instr_count;	/* instructions executed since reset */
+static const char *stats_path;		/* --stats FILE, read by the gdb pane */
+
+static void emit_time(avr_t *avr)
+{
+	fprintf(out, "time %llu %llu %lu\n", (unsigned long long)avr->cycle, instr_count,
+		(unsigned long)avr->frequency);
+	fflush(out);
+}
+
+/* Write the counters (see below) to the stats file. Written to a temp
+ * file and renamed, so the gdb pane never reads a half-written line. */
+static void write_stats(avr_t *avr, int stopped)
+{
+	if (!stats_path) return;
+	char tmp[4096];
+	snprintf(tmp, sizeof tmp, "%s.tmp", stats_path);
+	FILE *f = fopen(tmp, "w");
+	if (!f) return;
+	/* cycles instructions freq state */
+	fprintf(f, "%llu %llu %lu %s\n", (unsigned long long)avr->cycle, instr_count,
+		(unsigned long)avr->frequency, stopped ? "stopped" : "running");
+	fclose(f);
+	rename(tmp, stats_path);
+}
+
 static void usage(const char *prog)
 {
 	fprintf(stderr,
@@ -94,7 +126,8 @@ static void usage(const char *prog)
 		"  --gdb-port N   default 1234\n"
 		"  --no-gdb       do not start the gdb server\n"
 		"  --wait-gdb     start halted until gdb connects and continues\n"
-		"  --speed X      real-time multiplier (default 1.0, 0 = unthrottled)\n",
+		"  --speed X      real-time multiplier (default 1.0, 0 = unthrottled)\n"
+		"  --stats FILE   keep cycle/instruction totals in FILE (for the gdb pane)\n",
 		prog);
 }
 
@@ -118,6 +151,7 @@ int main(int argc, char **argv)
 		else if (!strcmp(a, "--freq") && has_arg)     freq = atol(argv[++i]);
 		else if (!strcmp(a, "--gdb-port") && has_arg) gdb_port = atoi(argv[++i]);
 		else if (!strcmp(a, "--speed") && has_arg)    speed = atof(argv[++i]);
+		else if (!strcmp(a, "--stats") && has_arg)    stats_path = argv[++i];
 		else if (!strcmp(a, "--no-gdb"))              use_gdb = 0;
 		else if (!strcmp(a, "--wait-gdb"))            wait_gdb = 1;
 		else if (a[0] != '-' && !elf)                 elf = a;
@@ -178,10 +212,21 @@ int main(int argc, char **argv)
 
 	emit_state(stopped);
 	emit_io(avr);
+	emit_time(avr);
+	write_stats(avr, stopped);
+	int64_t next_time = base_ns;
 
 	for (;;) {
 		/* Runs one instruction, or (if stopped) serves gdb for a short while. */
+		int before = avr->state;
+		avr_cycle_count_t cycle_before = avr->cycle;
 		int st = avr_run(avr);
+		/* An instruction ran if the cycle count advanced, unless the CPU was asleep
+		 * (sleeping also advances cycles). The state at entry can be "stopped": gdb's
+		 * continue/stepi resume the CPU inside this same call. A breakpoint stops the
+		 * CPU before its instruction runs, so it adds no cycles and isn't counted. */
+		if (avr->cycle != cycle_before && before != cpu_Sleeping)
+			instr_count++;
 		if (st == cpu_Done)    { reason = "done";    break; }
 		if (st == cpu_Crashed) { reason = "crashed"; break; }
 
@@ -189,8 +234,10 @@ int main(int argc, char **argv)
 		int now_stopped = (st == cpu_Stopped);
 		if (now_stopped != stopped) {
 			stopped = now_stopped;
-			emit_state(stopped);
 			emit_io(avr);	/* flush what happened before the change */
+			emit_time(avr);
+			write_stats(avr, stopped);
+			emit_state(stopped);
 			if (!stopped) {	/* resumed: restart the real-time clock */
 				base_ns = now_ns();
 				base_cycle = avr->cycle;
@@ -205,6 +252,10 @@ int main(int argc, char **argv)
 		if (t >= next_io) {
 			emit_io(avr);
 			next_io = t + 10000000LL;	/* ~10 ms */
+		}
+		if (!stopped && t >= next_time) {
+			emit_time(avr);		/* live stopwatch in the viewer */
+			next_time = t + 50000000LL;	/* ~50 ms */
 		}
 		if (stopped) {
 			/* avr_run already waited for gdb; keep the baseline fresh. */
@@ -225,6 +276,8 @@ int main(int argc, char **argv)
 	}
 
 	emit_io(avr);
+	emit_time(avr);
+	write_stats(avr, 1);
 	fprintf(out, "exit %s\n", reason);
 	fflush(out);
 	fprintf(stderr, "launcher: exit (%s)\n", reason);

@@ -261,6 +261,39 @@ function updateLeds() {
 const badge = $('badge');
 function setStatus(kind, text) { badge.className = kind; badge.textContent = text; }
 
+// Stopwatch. Totals come from "time <cycles> <instructions> <freq>" lines, the lap (between
+// the last two gdb stops, e.g. breakpoint to breakpoint) from "lap <cycles> <instructions>".
+// While running, the lap counts up live from the last stop.
+const clock = { cycles: 0, instr: 0, freq: 16e6, mark: null, lap: null, reset: null, running: true };
+const clockEl = $('clocktext');
+let clockHeight = 0;
+// Reset button: the server records the reset point (shared with gdb's `sw reset`)
+$('clockreset').addEventListener('click', () => { fetch('/reset', { method: 'POST' }).catch(() => {}); });
+const fmtMs = (c) => (c * 1000 / clock.freq).toFixed(3) + ' ms';
+const fmtN = (n) => n.toLocaleString('en-US');
+function renderClock() {
+  let text = `<span class="big">${fmtMs(clock.cycles)}</span>\n` +
+             `<span class="dim">${fmtN(clock.cycles)} cycles · ${fmtN(clock.instr)} instr</span>`;
+  if (clock.running && clock.mark) {
+    text += `\nlap  ${fmtMs(clock.cycles - clock.mark.cycles)} <span class="dim">(running)</span>`;
+  } else if (clock.lap) {
+    text += `\nlap  ${fmtMs(clock.lap.cycles)} <span class="dim">` +
+            `(${fmtN(clock.lap.cycles)} cyc, ${fmtN(clock.lap.instr)} instr)</span>`;
+  }
+  if (clock.reset) {
+    const c = clock.cycles - clock.reset.cycles, i = clock.instr - clock.reset.instr;
+    text += `\nreset ${fmtMs(c)} <span class="dim">(${fmtN(c)} cyc, ${fmtN(i)} instr)</span>`;
+  }
+  clockEl.innerHTML = text;
+  // The box grows when a lap/reset line appears: re-fit unless the user has panned/zoomed
+  const h = $('clock').offsetHeight;
+  if (h !== clockHeight) { clockHeight = h; if (!view.touched) fitView(); }
+}
+function clockStopped() {
+  // Remember where this stop was, for the live lap once the program runs again
+  clock.mark = { cycles: clock.cycles, instr: clock.instr };
+}
+
 let ended = false;
 function connectEvents() {
   const es = new EventSource('/events');
@@ -272,7 +305,24 @@ function connectEvents() {
       ports[f[1]].ddr = parseInt(f[2], 16);
       ports[f[1]].port = parseInt(f[3], 16);
       updateLeds();
+    } else if (f[0] === 'time') {
+      // time <cycles> <instructions> <freq>
+      clock.cycles = Number(f[1]);
+      clock.instr = Number(f[2]);
+      clock.freq = Number(f[3]) || clock.freq;
+      renderClock();
+    } else if (f[0] === 'mark') {
+      // mark <cycles> <instructions>: stopwatch reset point
+      clock.reset = { cycles: Number(f[1]), instr: Number(f[2]) };
+      renderClock();
+    } else if (f[0] === 'lap') {
+      // lap <cycles> <instructions>
+      clock.lap = { cycles: Number(f[1]), instr: Number(f[2]) };
+      renderClock();
     } else if (f[0] === 'state') {
+      clock.running = f[1] === 'running';
+      if (!clock.running) clockStopped();
+      renderClock();
       if (f[1] === 'running') setStatus('running', 'running');
       else setStatus('stopped', 'stopped (gdb)');
     } else if (f[0] === 'exit') {
@@ -316,11 +366,13 @@ function fitView() {
   const b = diagramBounds();
   if (!isFinite(b.x0)) return;
   const pad = 40, vw = innerWidth, vh = innerHeight;
+  // Keep the strip under the stopwatch box clear, so it never covers the circuit
+  const top = Math.max(pad, $('clock').getBoundingClientRect().bottom + 16);
   const bw = b.x1 - b.x0, bh = b.y1 - b.y0;
   // Never magnify beyond 2x; small circuits stay crisp and roughly Wokwi-sized.
-  view.k = Math.min((vw - 2 * pad) / bw, (vh - 2 * pad) / bh, 2);
+  view.k = Math.min((vw - 2 * pad) / bw, (vh - top - pad) / bh, 2);
   view.x = (vw - bw * view.k) / 2 - b.x0 * view.k;
-  view.y = (vh - bh * view.k) / 2 - b.y0 * view.k;
+  view.y = top + (vh - top - pad - bh * view.k) / 2 - b.y0 * view.k;
   applyView();
 }
 

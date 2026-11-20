@@ -5,6 +5,15 @@
 #
 # The pane refreshes every time the program stops (break, stepi, nexti...).
 # Edit REGISTERS below to add or remove rows.
+#
+# It also shows a stopwatch: simulated time and instruction counts, from the launcher's
+# counters (file named by $AVR_STATS). Commands:
+#   stopwatch          (or: sw)  print total time, the last lap and time since a reset
+#   stopwatch reset    (or: sw reset)  start a new measurement from here
+
+import os
+import threading
+import urllib.request
 
 import gdb
 
@@ -41,6 +50,156 @@ DIM = "\x1b[2m"
 RESET = "\x1b[0m"
 
 
+class Stopwatch:
+    """Simulated time and instruction counts, read from the launcher's stats file.
+
+    Time is cycles / clock frequency, so it is exact (62.5 ns per cycle at 16 MHz).
+      total = since the program started
+      lap   = between the last two times the program stopped (e.g. breakpoint to breakpoint)
+      since reset = since the last `stopwatch reset`
+    """
+
+    RETRY_S = 0.02     # gdb can report a stop just before the launcher has written its totals
+    RETRIES = 25
+
+    def __init__(self):
+        self.path = os.environ.get("AVR_STATS")
+        # The circuit viewer's server (make run), which shows the lap in the browser too
+        port = os.environ.get("AVR_VIEW_PORT")
+        self.server = f"http://127.0.0.1:{port}" if port else None
+        self.mark_path = os.environ.get("AVR_MARK")   # reset point, shared with the browser
+        self.last_stop = None    # (cycles, instructions) at the previous stop you saw
+        self.lap = None          # (cycles, instructions) between the last two stops
+        self.listeners = []      # called after the counters change (the pane redraws)
+        gdb.events.stop.connect(self._on_stop)
+
+    def read(self):
+        """(cycles, instructions, freq, state) or None if there is no data."""
+        if not self.path:
+            return None
+        try:
+            with open(self.path) as f:
+                cycles, instr, freq, state = f.read().split()
+            return int(cycles), int(instr), int(freq), state
+        except (OSError, ValueError):
+            return None
+
+    def _on_stop(self, _event):
+        # gdb.events.stop only fires for stops you see. gdb also stops the CPU internally
+        # (e.g. to step over a breakpoint before continuing), which the launcher can't tell
+        # apart, so the lap is worked out here.
+        self._try_update(self.RETRIES)
+
+    def _try_update(self, tries):
+        r = self.read()
+        if r is not None and r[3] != "stopped" and tries > 0:
+            # Not written yet: look again shortly (on gdb's thread, via post_event)
+            threading.Timer(self.RETRY_S, gdb.post_event,
+                            [lambda: self._try_update(tries - 1)]).start()
+            return
+        if r is not None and r[3] == "stopped":
+            now = (r[0], r[1])
+            if self.last_stop is not None and now != self.last_stop:
+                self.lap = (now[0] - self.last_stop[0], now[1] - self.last_stop[1])
+                self._send_lap()
+            self.last_stop = now
+        self.notify()
+
+    def _send_lap(self):
+        self._post("/lap", self.lap)
+
+    def _post(self, path, pair):
+        """Tell the viewer's server (in the background; ignore failures, e.g. in make sim)."""
+        if not self.server:
+            return
+        req = urllib.request.Request(self.server + path, data=f"{pair[0]} {pair[1]}".encode())
+
+        def post():
+            try:
+                urllib.request.urlopen(req, timeout=1)
+            except OSError:
+                pass
+
+        threading.Thread(target=post, daemon=True).start()
+
+    def read_mark(self):
+        """(cycles, instructions) of the last reset, from `sw reset` or the browser button."""
+        if not self.mark_path:
+            return None
+        try:
+            with open(self.mark_path) as f:
+                cycles, instr = f.read().split()
+            return int(cycles), int(instr)
+        except (OSError, ValueError):
+            return None
+
+    def reset(self):
+        r = self.read()
+        if r is None:
+            return
+        mark = (r[0], r[1])
+        if self.mark_path:
+            with open(self.mark_path + ".tmp", "w") as f:
+                f.write(f"{mark[0]} {mark[1]}\n")
+            os.replace(self.mark_path + ".tmp", self.mark_path)
+        self._post("/mark", mark)
+        self.notify()
+
+    def notify(self):
+        for fn in list(self.listeners):
+            fn()
+
+    def lines(self, bold="", reset=""):
+        """Text lines describing the counters."""
+        r = self.read()
+        if r is None:
+            return [f"{'time':<6}n/a (no simulator counters)"]
+        cycles, instr, freq, _ = r
+        lap = self.lap
+
+        # Two lines per measurement so it fits the narrow pane:
+        #   time      246.725 ms
+        #             3,947,601 cyc  2,636,872 ins
+        def block(label, c, i):
+            return [f"{bold}{label:<6}{reset}{c * 1000 / freq:>11.3f} ms",
+                    f"{'':<6}{c:,} cyc  {i:,} ins"]
+
+        out = block("time", cycles, instr)
+        if lap is not None:
+            out += block("lap", *lap)
+        mark = self.read_mark()
+        if mark is not None:
+            out += block("reset", cycles - mark[0], instr - mark[1])
+        return out
+
+
+STOPWATCH = Stopwatch()
+
+
+class StopwatchCommand(gdb.Command):
+    """Show simulated time and instruction counts.
+
+stopwatch          show total time, the last lap (between the last two stops)
+                   and the time since the last reset
+stopwatch reset    start a new measurement from here"""
+
+    def __init__(self):
+        super().__init__("stopwatch", gdb.COMMAND_STATUS)
+
+    def invoke(self, arg, from_tty):
+        if arg.strip() == "reset":
+            STOPWATCH.reset()
+            print("stopwatch reset")
+        elif arg.strip():
+            raise gdb.GdbError("usage: stopwatch [reset]")
+        for line in STOPWATCH.lines():
+            print(line)
+
+
+StopwatchCommand()
+gdb.execute("alias sw = stopwatch")
+
+
 def read_io():
     """Return the I/O area (0x20..0x5F) as bytes, or None if not connected."""
     try:
@@ -61,7 +220,8 @@ def render_text(io):
     def reg(addr):
         return io[addr - IO_START]
 
-    lines = [f"{BOLD}{'reg':<7}{'hex':>5}  {'76543210'}{RESET}"]
+    lines = STOPWATCH.lines(BOLD, RESET) + [""]
+    lines.append(f"{BOLD}{'reg':<7}{'hex':>5}  {'76543210'}{RESET}")
     for entry in REGISTERS:
         if entry is None:
             lines.append("")
@@ -101,11 +261,13 @@ class AvrIoWindow:
         self.tui.title = "AVR I/O"
         gdb.events.stop.connect(self._on_event)
         gdb.events.memory_changed.connect(self._on_event)
+        STOPWATCH.listeners.append(self.render)
         self.render()
 
     def close(self):
         gdb.events.stop.disconnect(self._on_event)
         gdb.events.memory_changed.disconnect(self._on_event)
+        STOPWATCH.listeners.remove(self.render)
 
     def _on_event(self, _event):
         self.render()

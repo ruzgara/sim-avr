@@ -15,6 +15,9 @@ mode="${1:?usage: run.sh run|sim|view}"
 GDB="${GDB:-}"
 
 SESSION="avr-$NAME"
+STATS="$SIM_DIR/build/stats"   # stopwatch counters, written by the launcher
+MARK="$STATS.mark"             # stopwatch reset point, written by `sw reset` or the browser button
+rm -f "$STATS" "$MARK"         # every session starts with a fresh stopwatch
 VIEW_URL="http://127.0.0.1:$VIEW_PORT/"
 
 # Quote an array into one string that a shell (inside tmux) will split back the same way
@@ -56,12 +59,12 @@ open_browser() {   # open_browser URL
 }
 
 launcher_cmd() {   # launcher_cmd [extra launcher options...]
-    quote "$LAUNCHER" --mcu "$MCU" --freq "$F_CPU" --gdb-port "$GDB_PORT" "$@" "$ELF"
+    quote "$LAUNCHER" --mcu "$MCU" --freq "$F_CPU" --gdb-port "$GDB_PORT" --stats "$STATS" "$@" "$ELF"
 }
 
 server_cmd() {     # server_cmd [extra launcher options...]
     printf '%s' "$(quote python3 "$SIM_DIR/viewer/server.py" --port "$VIEW_PORT" \
-        --diagram "$SIM_DIR/diagram.json" --)"
+        --diagram "$SIM_DIR/diagram.json" --mark "$MARK" --)"
     launcher_cmd "$@"
 }
 
@@ -70,7 +73,11 @@ gdb_cmd() {
         echo "error: avr-gdb not found - run ./simulation/setup" >&2
         exit 1
     fi
-    local args=("$GDB" -q -ex "source $SIM_DIR/gdb/avr_io.py" -x "$SIM_DIR/gdb/debug.gdb" "$ELF")
+    # AVR_STATS: where the launcher keeps its cycle/instruction counts (for the stopwatch)
+    # AVR_MARK: the stopwatch reset point (shared with the browser's reset button)
+    # AVR_VIEW_PORT: the viewer server, which gdb tells about each new lap and reset
+    local args=(env "AVR_STATS=$STATS" "AVR_MARK=$MARK" "AVR_VIEW_PORT=$VIEW_PORT" "$GDB" -q -ex "set pagination off" -ex "source $SIM_DIR/gdb/avr_io.py"
+                -ex "target remote :$GDB_PORT" -x "$SIM_DIR/gdb/debug.gdb" "$ELF")
     quote "${args[@]}"
 }
 
@@ -97,6 +104,23 @@ attach_here() {
     fi
 }
 
+# End the tmux session (stops gdb + simulator) and ttyd. ttyd exits gracefully on TERM but
+# can wait for a connected browser tab, so it is forced to stop after a second.
+cleanup_browser() {
+    # Don't let set -e abort the cleanup: after quitting gdb the session is already gone,
+    # so kill-session fails, and ttyd must still be stopped.
+    set +e
+    tmux kill-session -t "$SESSION" 2>/dev/null
+    [[ -n "${TTYD_PID:-}" ]] || return 0
+    kill "$TTYD_PID" 2>/dev/null
+    for _ in $(seq 10); do
+        kill -0 "$TTYD_PID" 2>/dev/null || return 0
+        sleep 0.1
+    done
+    kill -9 "$TTYD_PID" 2>/dev/null
+    return 0
+}
+
 # Serve the tmux session to the browser with ttyd and wait until it ends
 attach_browser() {
     require ttyd
@@ -110,8 +134,9 @@ attach_browser() {
         tmux attach-session -t "$SESSION" >/dev/null 2>&1 &
     TTYD_PID=$!   # global: the exit trap runs after this function has returned
     # On Ctrl-C or exit: end the tmux session (stops gdb + simulator) and ttyd
-    trap 'tmux kill-session -t "$SESSION" 2>/dev/null; kill "$TTYD_PID" 2>/dev/null' EXIT
-    trap 'exit 0' INT TERM
+    trap cleanup_browser EXIT
+    # Ctrl-C, kill, or closing the terminal window (HUP) all end the session cleanly
+    trap 'exit 0' INT TERM HUP
 
     local url="${VIEW_URL}session.html?term=$TERM_PORT"
     open_browser "$url"
