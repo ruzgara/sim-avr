@@ -1,0 +1,81 @@
+# simulation/avr.mk - build and simulation rules for an ATmega328P (Arduino Nano) assembly project.
+#
+# The project's Makefile only needs:
+#     NAME := myproject
+#     include simulation/avr.mk
+#
+#   make          assemble every .s in the project folder into NAME.hex
+#   make run      simulator + avr-gdb (tmux) + circuit viewer in the browser
+#   make sim      simulator + avr-gdb (tmux), no viewer
+#   make view     simulator running freely + circuit viewer, no gdb
+#   make clean    delete build output
+
+# Folder this file lives in (simulation/), without a trailing slash
+SIM_DIR   := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
+NAME      ?= $(notdir $(CURDIR))
+
+MCU       := atmega328p
+F_CPU     := 16000000
+# Linker emulation for the ATmega328P family
+ARCH      := avr5
+GDB_PORT  := 1234
+VIEW_PORT := 8000
+
+BUILD     := $(SIM_DIR)/build
+SRCS      := $(wildcard *.s)
+OBJS      := $(SRCS:%.s=$(BUILD)/%.o)
+ELF       := $(BUILD)/$(NAME).elf
+HEX       := $(NAME).hex
+LAUNCHER  := $(BUILD)/launcher
+
+AS      := avr-as
+LD      := avr-ld
+OBJCOPY := avr-objcopy
+SIZE    := avr-size
+CC      ?= cc
+# avr-gdb on macOS (Homebrew); Ubuntu uses gdb-multiarch
+GDB     := $(shell command -v avr-gdb 2>/dev/null || command -v gdb-multiarch 2>/dev/null)
+
+ASFLAGS := -g -mmcu=$(MCU)
+LDFLAGS := -m $(ARCH)
+
+LAUNCHER_CFLAGS := -O2 -Wall -Wextra $(shell pkg-config --cflags simavr 2>/dev/null)
+LAUNCHER_LIBS   := $(shell pkg-config --libs simavr libelf 2>/dev/null || pkg-config --libs simavr 2>/dev/null || echo -lsimavr -lelf)
+
+.PHONY: all run sim view clean distclean launcher
+all: $(HEX)
+
+$(BUILD):
+	@mkdir -p $@
+
+$(BUILD)/%.o: %.s | $(BUILD)
+	$(AS) $(ASFLAGS) -o $@ $<
+
+$(ELF): $(OBJS)
+	$(LD) $(LDFLAGS) -o $@ $^
+
+$(HEX): $(ELF)
+	$(OBJCOPY) -O ihex -R .eeprom $< $@
+	@$(SIZE) $<
+
+# The launcher is compiled per machine, so a project copied between Mac and Linux rebuilds it.
+launcher: $(LAUNCHER)
+$(LAUNCHER): $(SIM_DIR)/launcher/launcher.c | $(BUILD)
+	$(CC) $(LAUNCHER_CFLAGS) $< $(LAUNCHER_LIBS) -o $@
+
+# Everything run.sh needs, passed as environment variables
+RUN_ENV := SIM_DIR="$(SIM_DIR)" NAME="$(NAME)" ELF="$(ELF)" LAUNCHER="$(LAUNCHER)" \
+           GDB="$(GDB)" MCU="$(MCU)" F_CPU="$(F_CPU)" GDB_PORT="$(GDB_PORT)" VIEW_PORT="$(VIEW_PORT)"
+
+run sim view: $(HEX) $(LAUNCHER)
+	@$(RUN_ENV) "$(SIM_DIR)/run.sh" $@
+
+clean:
+	rm -f $(BUILD)/*.o $(BUILD)/*.elf $(HEX)
+
+# Also removes the compiled launcher
+distclean: clean
+	rm -f $(LAUNCHER)
+
+# Keep the .elf: it holds the debug info avr-gdb uses
+.SECONDARY:

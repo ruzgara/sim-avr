@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+# simulation/setup - one-time setup for a project using this simulation kit.
+#
+#   ./simulation/setup
+#
+# 1. Checks the tools the kit needs and offers to install any that are missing (brew / apt).
+# 2. Creates the project's Makefile, a starter .s file, wokwi.toml and .gitignore if they don't exist.
+# 3. Builds the simulator launcher.
+#
+# Safe to run again at any time: it never overwrites existing files.
+set -euo pipefail
+
+SIM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SIM_DIR")"
+NAME="$(basename "$PROJECT_DIR")"
+
+bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
+ok()    { printf '  \033[32mok\033[0m       %s\n' "$*"; }
+miss()  { printf '  \033[31mmissing\033[0m  %s\n' "$*"; }
+note()  { printf '  %s\n' "$*"; }
+
+ask() {   # ask "question" -> returns 0 for yes
+    local reply
+    read -r -p "$1 [y/N] " reply
+    [[ "$reply" =~ ^[Yy] ]]
+}
+
+# ---------------------------------------------------------------- 1. dependencies
+
+case "$(uname)" in
+    Darwin) PLATFORM=mac ;;
+    Linux)  if command -v apt-get >/dev/null; then PLATFORM=apt; else PLATFORM=other; fi ;;
+    *)      PLATFORM=other ;;
+esac
+
+# Each check: "description|test command|brew package|apt package"
+CHECKS=(
+    "avr assembler (avr-as)|command -v avr-as|osx-cross/avr/avr-gcc|binutils-avr"
+    "avr linker (avr-ld, avr-objcopy)|command -v avr-ld && command -v avr-objcopy|osx-cross/avr/avr-gcc|binutils-avr"
+    "avr-gdb / gdb-multiarch|command -v avr-gdb || command -v gdb-multiarch|osx-cross/avr/avr-gdb|gdb-multiarch"
+    "simavr library + headers|pkg-config --exists simavr|osx-cross/avr/simavr|libsimavr-dev"
+    "libelf|pkg-config --exists libelf || [ -e /usr/lib/x86_64-linux-gnu/libelf.so ] || [ -e /usr/lib/aarch64-linux-gnu/libelf.so ]|libelf|libelf-dev"
+    "C compiler (cc)|command -v cc|-|build-essential"
+    "pkg-config|command -v pkg-config|pkgconf|pkg-config"
+    "tmux|command -v tmux|tmux|tmux"
+    "python3|command -v python3|python3|python3"
+)
+
+bold "Checking dependencies ($PLATFORM)"
+missing_pkgs=()
+for check in "${CHECKS[@]}"; do
+    IFS='|' read -r desc test brew_pkg apt_pkg <<< "$check"
+    if bash -c "$test" >/dev/null 2>&1; then
+        ok "$desc"
+    else
+        miss "$desc"
+        case "$PLATFORM" in
+            mac) pkg="$brew_pkg" ;;
+            apt) pkg="$apt_pkg" ;;
+            *)   pkg="-" ;;
+        esac
+        [[ "$pkg" != "-" ]] && missing_pkgs+=("$pkg")
+    fi
+done
+
+if ((${#missing_pkgs[@]})); then
+    # Remove duplicates, keep order
+    read -r -a missing_pkgs <<< "$(printf '%s\n' "${missing_pkgs[@]}" | awk '!seen[$0]++' | tr '\n' ' ')"
+    echo
+    case "$PLATFORM" in
+        mac)
+            if ! command -v brew >/dev/null; then
+                echo "Homebrew is needed to install these: https://brew.sh"
+                exit 1
+            fi
+            cmd=(brew install "${missing_pkgs[@]}")
+            ;;
+        apt)
+            cmd=(sudo apt-get install -y "${missing_pkgs[@]}")
+            ;;
+        *)
+            echo "Unsupported platform: install the missing tools above manually, then run this again."
+            exit 1
+            ;;
+    esac
+    echo "To install the missing tools this will run:"
+    note "${cmd[*]}"
+    if ask "Install now?"; then
+        [[ "$PLATFORM" == apt ]] && sudo apt-get update
+        "${cmd[@]}"
+    else
+        echo "Skipped. Install them yourself, then run ./simulation/setup again."
+        exit 1
+    fi
+fi
+
+# gdb's Python TUI windows (the I/O pane) need gdb 10 or newer with Python
+GDB="$(command -v avr-gdb || command -v gdb-multiarch)"
+if ! "$GDB" -batch -ex 'python import gdb; assert hasattr(gdb, "register_window_type")' >/dev/null 2>&1; then
+    echo
+    echo "warning: $GDB has no Python TUI support (needs gdb >= 10 with Python)."
+    echo "         Debugging works, but the I/O register pane (layout avr) won't."
+fi
+
+# ---------------------------------------------------------------- 2. project files
+
+echo
+bold "Setting up project '$NAME' in $PROJECT_DIR"
+cd "$PROJECT_DIR"
+
+if [[ -e Makefile ]]; then
+    note "Makefile exists, leaving it"
+else
+    printf 'NAME := %s\ninclude simulation/avr.mk\n' "$NAME" > Makefile
+    note "created Makefile"
+fi
+
+if compgen -G '*.s' >/dev/null; then
+    note "assembly source exists, leaving it"
+else
+    cat > "$NAME.s" <<'EOF'
+; Starter program: blinks the LEDs on D8-D11 (PB0-PB3) about once a second.
+
+.equ SREG,  0x3f
+.equ DDRB,  0x04
+.equ PORTB, 0x05
+
+.org 0
+
+main:
+    ldi r16, 0
+    out SREG, r16           ; clear the status register
+    ldi r16, 0b00001111
+    out DDRB, r16           ; PB0-PB3 are outputs
+
+mainloop:
+    ldi r16, 0b00001111
+    out PORTB, r16          ; LEDs on
+    rcall delay
+    ldi r16, 0
+    out PORTB, r16          ; LEDs off
+    rcall delay
+    rjmp mainloop
+
+delay:                      ; about 0.5 s at 16 MHz (40 x 256 x 256 loop iterations)
+    ldi r20, 40
+1:  clr r19
+2:  clr r18
+3:  dec r18
+    brne 3b
+    dec r19
+    brne 2b
+    dec r20
+    brne 1b
+    ret
+EOF
+    note "created $NAME.s"
+fi
+
+if [[ -e simulation/wokwi.toml ]]; then
+    note "simulation/wokwi.toml exists, leaving it"
+else
+    cat > simulation/wokwi.toml <<EOF
+# Only used by the official Wokwi VS Code extension (F1 > "Wokwi: Select Config File").
+# The kit's own viewer (make run / make view) does not need this file.
+[wokwi]
+version = 1
+firmware = '../$NAME.hex'
+elf = 'build/$NAME.elf'
+EOF
+    note "created simulation/wokwi.toml"
+fi
+
+if ! grep -qx 'simulation/build/' .gitignore 2>/dev/null; then
+    echo 'simulation/build/' >> .gitignore
+    note "added simulation/build/ to .gitignore"
+fi
+
+chmod +x simulation/run.sh simulation/setup
+
+# ---------------------------------------------------------------- 3. launcher
+
+echo
+bold "Building the simulator launcher"
+make --no-print-directory launcher
+
+echo
+bold "Done."
+echo "  make        build $NAME.hex"
+echo "  make run    simulator + gdb + circuit viewer"
+echo "  make sim    simulator + gdb"
+echo "  make view   circuit viewer only (program runs freely)"
