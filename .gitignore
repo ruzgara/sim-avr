@@ -3,3 +3,4 @@ example/*.hex
 .DS_Store
 # Generated per project by setup (written here via example/simulation symlink)
 simulation/wokwi.toml
+DESIGN.md

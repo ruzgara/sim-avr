@@ -5,7 +5,7 @@
  * runs the program at (about) real-time speed, and prints what the I/O ports
  * are doing on stdout so other tools (the browser viewer) can follow along.
  *
- * stdout protocol (one event per line, see DESIGN.md):
+ * stdout protocol (one event per line):
  *   io <port> <ddr> <port> <pin>   e.g. "io B 0f 05 05"
  *   state <running|stopped>
  *   exit <reason>

@@ -51,7 +51,7 @@ run the same project if you want it.
 
 ## How it works
 
-See [DESIGN.md](DESIGN.md). In short: `simulation/build/launcher` is a small C program built on
+`simulation/build/launcher` is a small C program built on
 libsimavr that runs the firmware at real-time speed, serves gdb on :1234 and prints port changes;
 `viewer/server.py` relays those to the browser, where `viewer.js` draws the circuit with Wokwi's
 open-source part artwork (`@wokwi/elements`, MIT) and lights the LEDs.

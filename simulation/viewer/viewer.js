@@ -1,5 +1,5 @@
 // Circuit viewer: draws a Wokwi diagram.json with the <wokwi-*> web components and
-// animates it from the simulator's event stream (/events, see DESIGN.md).
+// animates it from the simulator's event stream (/events, served by server.py).
 //
 // Overview:
 //   1. loadDiagram()   fetch /diagram.json, create one element per part
